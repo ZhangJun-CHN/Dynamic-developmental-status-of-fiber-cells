@@ -1,0 +1,49 @@
+#CytoTRACE
+library(CytoTRACE)
+library(Seurat)
+ser.obj <- readRDS("Seurat.rds")
+embryo_df <- as.data.frame(ser.obj@assays$RNA@data)
+dim(embryo_df)
+embryo_df <- as.matrix(embryo_df[rowSums(embryo_df)>0,])
+embryo_df[1:4,1:2]
+res <- CytoTRACE(embryo_df, ncores = 1)
+pheno <- as.character(ser.obj$seurat_clusters)
+names(pheno) <- rownames(ser.obj@meta.data)
+dir.create("6.CytoTRACE_1")
+DimPlot(ser.obj,reduction = "tsne")
+emb <- as.data.frame(Embeddings(ser.obj,reduction = "tsne"))
+plotCytoTRACE(res, phenotype = pheno,outputDir = "6.CytoTRACE_1/",emb = emb)
+
+#SCORPIUS
+install.packages("SCORPIUS")
+library(SCORPIUS)
+scRNAsub<-readRDS("Seurat.rds")
+
+Cells.sub <- subset(pancreas.integrated@meta.data, seurat_clusters=="3")
+scRNAsub <- subset(pancreas.integrated, cells=row.names(Cells.sub))
+table(scRNAsub@active.ident)
+head(scRNAsub,5)
+gland_cluster <-scRNAsub
+expression <- as.matrix(gland_cluster@assays$RNA@data)
+group_name <- gland_cluster$seurat_clusters
+space <- reduce_dimensionality(t(expression), "spearman")
+draw_trajectory_plot(space, group_name, contour = TRUE)
+traj <- infer_trajectory(space)
+draw_trajectory_plot(space, group_name, traj$path, contour = TRUE)
+gimp <- gene_importances(
+  t(expression), 
+  traj$time, 
+  num_permutations = 10, 
+  num_threads = 8, 
+  ntree = 10000,
+  ntree_perm = 1000
+) 
+gimp$qvalue <- p.adjust(gimp$pvalue, "BH", length(gimp$pvalue))
+gene_sel <- gimp$gene[gimp$qvalue < .05]
+expr_sel <- scale_quantile(t(expression)[,gene_sel])
+draw_trajectory_heatmap(expr_sel,traj$time,progression_group =group_name)
+gene_sel_pvalue <- gimp[gimp$qvalue < .05,]
+expr_sel_t <- t(expr_sel)
+rownames(gene_sel_pvalue) <- gene_sel_pvalue$gene
+merge_exp <- merge(gene_sel_pvalue,expr_sel_t,by="row.names")
+write.table(merge_exp,row.names = F,file = "significant.gene.tsv")
