@@ -1,0 +1,234 @@
+library(Seurat)
+  library(SeuratObject)
+  library(cowplot)
+  
+  library(stringr)
+  library("scater")
+  library("scran")
+  library("BiocParallel")
+  library(ggplot2)
+  library(dplyr)
+ library(DoubletFinder)
+  library(tidyverse)
+samples=list.files("/data/1")
+samples
+dir <- file.path('/data/1',samples)
+names(dir) <- samples
+scRNA <- Read10X(data.dir = dir)
+scRNA = CreateSeuratObject(scRNA, min.cells=1)
+dim(scRNA)
+table(scRNA@meta.data$orig.ident) 
+
+keloid <- scRNA
+  ## Pre-process Seurat object
+  keloid <- NormalizeData(keloid)
+  keloid <- ScaleData(keloid)
+  keloid <- FindVariableFeatures(keloid, selection.method = "vst", nfeatures = 2000)
+  keloid <- RunPCA(keloid)
+  keloid <- RunUMAP(keloid, dims = 1:10)
+  
+  ## (2)pK Identification 
+  sweep.res.list_keloid <- paramSweep_v3(keloid, PCs = 1:30, sct = FALSE)
+  #head(sweep.res.list_keloid)
+  sweep.stats_keloid <- summarizeSweep(sweep.res.list_keloid, GT = FALSE)
+  bcmvn_keloid <- find.pK(sweep.stats_keloid)
+
+  mpK<-as.numeric(as.vector(bcmvn_keloid$pK[which.max(bcmvn_keloid$BCmetric)]))
+  mpK
+  #0.3
+  ## (3) Homotypic Doublet Proportion Estimate
+  annotations <- keloid@meta.data$seurat_clusters
+  homotypic.prop <- modelHomotypic(annotations)  
+  DoubletRate = ncol(keloid)*8*1e-6 
+  DoubletRate
+  #DoubletRate =  0.112536
+   homotypic.prop <- modelHomotypic(annotations)
+  nExp_poi <- round(0.112536*nrow(keloid@meta.data)) 
+  nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+  
+  nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+  
+  ## (4)Doublets. Run DoubletFinder with varying classification stringencies 
+keloid <- doubletFinder_v3(keloid, PCs = 1:10, pN = 0.25, pK = mpK, nExp = nExp_poi, reuse.pANN = FALSE, sct = F)
+keloid <- doubletFinder_v3(keloid, PCs = 1:10, pN = 0.25, pK = mpK, nExp = nExp_poi.adj, reuse.pANN = FALSE, sct = F)
+  ## Plot results 
+  keloid@meta.data[,"DF_hi.lo"] <- keloid@meta.data$DF.classifications_0.25_0.3_1583
+  keloid@meta.data$DF_hi.lo[which(keloid@meta.data$DF_hi.lo == "Doublet" & keloid@meta.data$DF.classifications_0.25_0.3_1583 == "Singlet")] <- "Doublet-Low Confidience"
+  keloid@meta.data$DF_hi.lo[which(keloid@meta.data$DF_hi.lo == "Doublet")] <- "Doublet-High Confidience"
+  table(keloid@meta.data$DF_hi.lo)
+
+  png("/1/2_doubletFinder.png",2500,1800,res=300)
+  DimPlot(keloid, reduction = "umap", group.by ="DF_hi.lo",cols =c("black","red","gold"))
+  DimPlot(keloid, reduction = "umap", group.by ="DF_hi.lo",cols =c("black","red","gold"))  
+  dev.off()
+  saveRDS(keloid, file = "/data/1/sc_keloid_1_seurat_unanno.rds")
+
+combined_object<-keloid
+DimPlot(combined_object,group.by="Double_status")
+
+combined_object2 <- subset(combined_object, subset = Double_status == "Doublet" )
+DimPlot(combined_object2,group.by="Double_status")
+rm(combined_object2)
+combined_object <- subset(combined_object, subset = Double_status == "Singlet" )
+table(combined_object@meta.data$orig.ident)
+
+combined_object <- subset(combined_object, subset = nFeature_RNA > 200 & nFeature_RNA <  5000 &nCount_RNA<10000&nCount_RNA>200&percent.mt<2 )
+table(combined_object@meta.data$orig.ident)
+
+plot2 <- FeatureScatter(combined_object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2
+table(combined_object@meta.data$orig.ident)
+
+#protoplast
+protoplast<-read.table("02.protoplast_gene.txt",sep="\t",header=F)
+protoplast=as.matrix(protoplast)
+protoplast <- protoplast[protoplast %in% rownames(combined_object)]
+percent.proto <- Matrix::colSums(combined_object@assays$RNA@counts[protoplast, ])/Matrix::colSums(combined_object@assays$RNA@counts)
+combined_object <- AddMetaData(object = combined_object, metadata = percent.proto, col.name = "percent.proto")
+max(combined_object[["percent.proto"]])
+
+SC1<-VlnPlot(combined_object, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.proto"), ncol = 2)
+SC1
+SC3 <- VlnPlot(combined_object, group.by = "orig.ident", features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.proto"), ncol = 2, DoPoints = FALSE)
+
+combined_object <- subset(combined_object, subset = nFeature_RNA > 200 & nFeature_RNA <  5000 &nCount_RNA<10000&nCount_RNA>200&percent.mt<2 )#过滤
+table(combined_object@meta.data$orig.ident)
+ggsave(SC1,file=paste(outdir,"VlnPlot_scovule_after.pdf",sep="/"), width = 6, height = 6)
+ggsave(SC1,file=paste(outdir,"VlnPlot_scovule_after.png",sep="/"), width = 6, height = 6)
+pancreas.list <- SplitObject(combined, split.by = "orig.ident")
+summary(pancreas.list)
+for (i in 1:length(pancreas.list)){
+  pancreas.list[[i]] <- NormalizeData(pancreas.list[[i]], verbose = FALSE)
+  pancreas.list[[i]] <- FindVariableFeatures(pancreas.list[[i]], selecion.method = "vst", nfeatures = 2000, verbose = FALSE)}
+reference.list <- pancreas.list[c("J668", "mml3")]
+pancreas.anchors <- FindIntegrationAnchors(object.list = reference.list, dims =1:10)
+
+pancreas.integrated <- IntegrateData(anchorset = pancreas.anchors, dims = 1:10)
+head(pancreas.integrated@meta.data)
+
+DefaultAssay(pancreas.integrated) <- "integrated"
+pancreas.integrated <- NormalizeData(pancreas.integrated, normalization.method = "LogNormalize", scale.factor = 10000)
+pancreas.integrated <- FindVariableFeatures(pancreas.integrated, selection.method = "vst", nfeatures = 2000)
+pancreas.integrated <- ScaleData(pancreas.integrated, features=VariableFeatures(pancreas.integrated), vars.to.regress = c("S.Score", "G2M.Score","percent.proto","percent.mt"))
+
+pancreas.integrated <- RunPCA(pancreas.integrated, features = VariableFeatures(object = pancreas.integrated))
+
+ElbowPlot(pancreas.integrated)
+head(pancreas.integrated@reductions$pca@cell.embeddings,3) 
+head(pancreas.integrated@reductions$pca@feature.loadings,3)
+
+pancreas.integrated <- FindNeighbors(pancreas.integrated, dims = 1:15)
+
+#pancreas.integrated <- combined_object
+
+# install.packages("clustree")
+library(clustree)
+sce <- FindClusters(
+  object = pancreas.integrated,
+  resolution = c(seq(.1,.9,.1))
+)
+clustree(sce@meta.data, prefix = "integrated_snn_res.")
+clustree(sce@meta.data, prefix = "RNA_snn_res.")
+colnames(sce@meta.data)
+sce <- RunUMAP(sce, reduction = "pca", dims = 1:15)
+p01=DimPlot(sce, reduction = 'umap', group.by = 'integrated_snn_res.0.5',
+            label = TRUE, pt.size = 0.5) #+ NoLegend()
+p01=DimPlot(sce, reduction = 'umap', group.by = 'RNA_snn_res.0.3',
+            label = TRUE, pt.size = 0.5) #+ NoLegend()
+p02=DimPlot(sce, reduction = 'umap', group.by = 'RNA_snn_res.0.4',
+            label = TRUE, pt.size = 0.5) #+ NoLegend()
+p03=DimPlot(sce, reduction = 'umap', group.by = 'RNA_snn_res.0.6',
+            label = TRUE, pt.size = 0.5) #+ NoLegend()
+p01+p02+p03
+
+p02=DimPlot(sce, reduction = 'umap', group.by = 'orig.ident',
+            label = TRUE, pt.size = 0.5) 
+library(patchwork)
+p01+p02
+
+library(gplots)
+balloonplot(table(sce$integrated_snn_res.0.5,
+                  sce$orig.ident))
+
+balloonplot(table(sce$RNA_snn_res.0.5,
+                  sce$orig.ident))
+
+DimPlot(sce, reduction = 'umap', group.by = 'Phase',
+        label = TRUE, pt.size = 0.5) 
+
+DimPlot(sce, group.by="orig.ident")
+WT <- subset(sce@meta.data, orig.ident =="WT")
+WT <- subset(sce, cells=row.names(WT))
+plot3<-DimPlot(WT, reduction = "umap",label = TRUE)
+table(WT@active.ident) 
+pancreas.integrated <- FindClusters(pancreas.integrated, resolution = 0.4)
+pancreas.integrated <- RunUMAP(pancreas.integrated, dims = 1:20)
+pancreas.integrated <- RunTSNE(pancreas.integrated, dims = 1:20)
+library(gplots)
+balloonplot(table(pancreas.integrated$seurat_clusters,
+                  pancreas.integrated$orig.ident))
+DimPlot(pancreas.integrated, reduction = 'umap', group.by = 'Phase',
+        label = TRUE, pt.size = 0.5) 
+DimPlot(pancreas.integrated, group.by="orig.ident")
+
+p01=DimPlot(pancreas.integrated, reduction = 'umap',
+            label = TRUE, pt.size = 0.5) #+ NoLegend()
+p02=DimPlot(pancreas.integrated, reduction = 'umap', group.by = 'orig.ident',
+            label = TRUE, pt.size = 0.5) 
+library(patchwork)
+p01+p02
+FeaturePlot(pancreas.integrated, features = c("GH-A12G2598"))
+VlnPlot(pancreas.integrated, features = c("GH-A12G2598"),ncol=1, same.y.lims=T,slot = "counts", log = TRUE)
+pbmc.markers <- FindAllMarkers(pancreas.integrated, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+pbmc.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+top20 <- pbmc.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+DoHeatmap(pancreas.integrated, features = top20$gene) + NoLegend()
+saveRDS(pancreas.integrated,file = "/data/0.3/Seurat.rds")
+write.csv(pbmc.markers,"/data/0.3/Markers.csv")
+
+
+
+#Spatial Transcriptome
+seurat_object <- readRDS("STovule.rds")
+sce <- FindNeighbors(seurat_object)
+library(clustree)
+sce <- FindClusters(
+  object = sce,
+  resolution = c(seq(2,5,.2))
+)
+clustree(sce@meta.data, prefix = "SCT_snn_res.")
+colnames(sce@meta.data)
+
+sce <- RunUMAP(sce, reduction = "pca", dims = 1:20)
+
+
+p01<-SpatialDimPlot(sce, group.by = 'SCT_snn_res.5',
+                    label = TRUE) #+ NoLegend()
+p01
+ggsave(p01,file=paste(outdir,"SpatialDimPlot_ovule.pdf",sep="/"), width = 6, height = 6)
+ggsave(p01,file=paste(outdir,"SpatialDimPlot_ovule.png",sep="/"), width = 6, height = 6)
+p02<-SpatialDimPlot(sce, group.by = 'SCT_snn_res.4.4'
+) #+ NoLegend()
+p02
+ggsave(p02,file=paste(outdir,"SpatialDimPlot_ovule2.pdf",sep="/"), width = 6, height = 6)
+ggsave(p02,file=paste(outdir,"SpatialDimPlot_ovule2.png",sep="/"), width = 6, height = 6)
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_object <- FindVariableFeatures(seurat_object, selection.method = "vst", nfeatures = 2000)
+seurat_object <- ScaleData(seurat_object, features = rownames(seurat_object), vars.to.regress =  c("nCount_Spatial","nCount_SCT"))
+seurat_object<-FindNeighbors(seurat_object)
+seurat_object <- FindClusters(seurat_object, resolution = 4.4)
+seurat_object <- RunPCA(seurat_object,  features = VariableFeatures(object = seurat_object) ,verbose = FALSE)
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:20)
+seurat_object <- RunTSNE(seurat_object, reduction = "pca", dims = 1:20)
+p001<-DimPlot(seurat_object, reduction = 'umap', 
+        label = TRUE, pt.size = 2) 
+p001
+ggsave(p001,file=paste(outdir,"DimPlot_ovule4.4label.pdf",sep="/"), width = 6, height = 6)
+ggsave(p001,file=paste(outdir,"DimPlot_ovule4.4label.png",sep="/"), width = 6, height = 6)
+
+p03<-SpatialDimPlot(seurat_object, group.by = "seurat_clusters",label = TRUE, pt.size = 1.5)
+p03
+ggsave(p03,file=paste(outdir,"SpatialDimPlot_ovule4.4label.pdf",sep="/"), width = 6, height = 6)
+ggsave(p03,file=paste(outdir,"SpatialDimPlot_ovule4.4label.png",sep="/"), width = 6, height = 6)
+saveRDS(sub_seurat_object, file = "/data/0.3/ST.rds")
+
