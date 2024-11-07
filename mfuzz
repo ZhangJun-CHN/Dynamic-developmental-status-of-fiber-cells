@@ -1,0 +1,33 @@
+library(Mfuzz)
+scRNAsub <- readRDS('Seurat.rds')
+library(Seurat)
+expre <- AverageExpression(scRNAsub)
+write.csv(expre$RNA,"expre.csv")
+
+genelist <- read.table("genelist.csv",header = T)
+expre1 <- expre$RNA[genelist$gene,]
+write.csv(expre1,"D:\\filtered_feature_bc_matrix\\glandcom1018\\expre1.csv")
+head(expre1)
+
+exp_file <- expre1
+
+exp_file[1:4]%>%head()
+exp_file <- as.matrix(exp_file)
+mfuzz_class <- new('ExpressionSet',exprs = exp_file)
+mfuzz_class <- filter.NA(mfuzz_class, thres = 0.25)
+mfuzz_class <- fill.NA(mfuzz_class, mode = 'mean')
+mfuzz_class <- filter.std(mfuzz_class, min.std = 0)
+
+mfuzz_class <- standardise(mfuzz_class)
+
+set.seed(123)
+cluster_num <- 6
+mfuzz_cluster <- mfuzz(mfuzz_class, c = cluster_num, m = mestimate(mfuzz_class))
+
+#plot
+capabilities()
+Sys.getenv(c("DISPLAY"))
+mfuzz.plot2(mfuzz_class, cl = mfuzz_cluster, mfrow = c(2, 3), time.labels = colnames(exp_file),x11 = F)
+
+gene_cluster <- cbind(mfuzz_cluster$cluster, mfuzz_cluster$membership)
+colnames(gene_cluster)[1] <- 'cluster'
