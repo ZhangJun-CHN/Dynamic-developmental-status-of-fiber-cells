@@ -1,0 +1,24 @@
+
+library(clusterProfiler)
+library(ggplot2)
+setwd("D:\\GO")
+args<-commandArgs(T)
+gene_list_file<-args[1]
+out<- strsplit(gene_list_file,split = "\\.")
+out<-unlist(out)[1]
+pic=paste0(out,"7.pdf")
+out=paste0(out,"7.csv")
+go_gene <- read.table("TM-1_final.agriGO.txt")
+go_desc=read.csv("GO_desc_all.csv")
+go_desc$nameform<-substr(go_desc$name,1,50)
+term2gene <- data.frame(TERM=go_gene$V2,gene=go_gene$V1)
+term2dec=data.frame(TERM=go_desc$Goid,NAME=go_desc$nameform)
+sample_list=read.table("gene_list_file.txt")
+#sample_list=read.csv("WGD10selected_pairs1.CSV")
+sample=sample_list$V1
+en_go <- enricher(sample,TERM2GENE = term2gene,TERM2NAME = term2dec,pvalueCutoff = 0.05,pAdjustMethod = "BH")
+pdf(pic)
+dotplot(en_go)
+#print(dotplot(en_go))
+dev.off()
+write.csv(en_go@result,file=out)
